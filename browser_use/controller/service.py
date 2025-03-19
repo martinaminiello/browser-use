@@ -433,7 +433,7 @@ class Controller:
 
 						if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
 							logger.info(f"[FRAME {frame_index}] Clicking dropdown to open")
-							await dropdown_locator.click()
+							await dropdown_locator.click(force=True)
 							await page.wait_for_timeout(500)
 						else:
 							logger.error(f"[FRAME {frame_index}] Dropdown not ready for interaction")
@@ -457,7 +457,7 @@ class Controller:
 									logger.info(
 										f"[FRAME {frame_index}] Waiting for combobox option '{text}' to be visible")
 									await option_locator.wait_for(state="visible", timeout=5000)
-									selected_option_values = await option_locator.click(timeout=10000)
+									selected_option_values = await option_locator.click(force=True)
 
 								msg = f"[FRAME {frame_index}] SUCCESS: Selected option '{text}' with value {selected_option_values}"
 								logger.info(msg)
