@@ -378,7 +378,7 @@ class Controller:
 			description='Select dropdown option for interactive element index by the text of the option you want to select',
 		)
 
-		
+
 
 		async def select_dropdown_option(
 				index: int,
@@ -454,7 +454,7 @@ class Controller:
 							# 3. Explicitly wait for desired option to be visible & stable
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
 							await option_locator.wait_for(state="visible", timeout=3000)
-							await option_locator.click()
+							await option_locator.click(force=True)
 
 							msg = f'Selected option {text} in combobox'
 							logger.info(msg)
