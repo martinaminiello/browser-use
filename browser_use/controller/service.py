@@ -377,9 +377,6 @@ class Controller:
 		@self.registry.action(
 			description='Select dropdown option for interactive element index by the text of the option you want to select',
 		)
-
-	
-
 		async def select_dropdown_option(
 				index: int,
 				text: str,
@@ -448,14 +445,31 @@ class Controller:
 							# 2. Wait until overlay shader disappears
 							await frame.wait_for_selector('.dx-overlay-shader', state='detached', timeout=5000)
 
-							# 🟢 OPTIONAL: small delay to allow popup stabilization (fix timing issues)
+							# Optional: small delay to allow popup stabilization
 							await asyncio.sleep(0.3)
 
 							# 3. Explicitly wait for desired option to be visible & stable
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
 							await option_locator.wait_for(state="visible", timeout=3000)
 
-							# 🟢 4. Add a check for element interactability and visibility before clicking
+							# 🟢 NEW: Check if anything covers the option before clicking
+							box = await option_locator.bounding_box()
+							if box:
+								x = box["x"] + box["width"] / 2
+								y = box["y"] + box["height"] / 2
+
+								elements_above = await frame.evaluate(f"""
+		                            () => {{
+		                                const elements = document.elementsFromPoint({x}, {y});
+		                                return elements.map(e => e.className || e.tagName);
+		                            }}
+		                        """)
+								logger.info(f"Elements at ({x:.0f}, {y:.0f}): {elements_above}")
+
+							# OPTIONAL: Pause for manual check
+							# await page.pause()
+
+							# 4. Check visibility/interactability
 							is_visible = await option_locator.is_visible()
 							is_interactable = await option_locator.is_enabled()
 							if is_visible and is_interactable:
