@@ -377,6 +377,9 @@ class Controller:
 		@self.registry.action(
 			description='Select dropdown option for interactive element index by the text of the option you want to select',
 		)
+
+		
+
 		async def select_dropdown_option(
 				index: int,
 				text: str,
@@ -439,14 +442,18 @@ class Controller:
 							locator = frame.locator(xpath).nth(0)
 							await locator.click()  # Open combobox
 
-							# 1. Wait for options to be visible
+							# 1. Wait for options to appear
 							await frame.wait_for_selector('[role="option"]', timeout=3000)
 
 							# 2. Wait until overlay shader disappears
 							await frame.wait_for_selector('.dx-overlay-shader', state='detached', timeout=5000)
 
-							# 3. Locate and click matching option
+							# 🟢 OPTIONAL: small delay to allow popup stabilization (fix timing issues)
+							await asyncio.sleep(0.3)
+
+							# 3. Explicitly wait for desired option to be visible & stable
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
+							await option_locator.wait_for(state="visible", timeout=3000)
 							await option_locator.click()
 
 							msg = f'Selected option {text} in combobox'
