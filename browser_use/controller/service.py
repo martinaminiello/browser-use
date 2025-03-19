@@ -426,7 +426,6 @@ class Controller:
 							continue
 
 						if dropdown_info['type'] == 'select':
-							# Native select
 							selected_option_values = (
 								await frame.locator(xpath).nth(0).select_option(label=text, timeout=1000)
 							)
@@ -435,41 +434,46 @@ class Controller:
 							return ActionResult(extracted_content=msg, include_in_memory=True)
 
 						elif dropdown_info['type'] == 'combobox':
-							# Custom combobox: open, then click desired option
 							locator = frame.locator(xpath).nth(0)
-							await locator.click()  # Open combobox
+							await locator.click()
 
-							# 1. Wait for options to appear
 							await frame.wait_for_selector('[role="option"]', timeout=3000)
-
-							# 2. Wait until overlay shader disappears
 							await frame.wait_for_selector('.dx-overlay-shader', state='detached', timeout=5000)
-
-							# Optional: small delay to allow popup stabilization
 							await asyncio.sleep(0.3)
 
-							# 3. Explicitly wait for desired option to be visible & stable
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
 							await option_locator.wait_for(state="visible", timeout=3000)
 
-							# 🟢 NEW: Check if anything covers the option before clicking
+							# Ensure no overlay blocks the click
+							max_attempts = 10
+							attempt = 0
 							box = await option_locator.bounding_box()
 							if box:
 								x = box["x"] + box["width"] / 2
 								y = box["y"] + box["height"] / 2
 
-								elements_above = await frame.evaluate(f"""
-		                            () => {{
-		                                const elements = document.elementsFromPoint({x}, {y});
-		                                return elements.map(e => e.className || e.tagName);
-		                            }}
-		                        """)
-								logger.info(f"Elements at ({x:.0f}, {y:.0f}): {elements_above}")
+								while attempt < max_attempts:
+									elements_above = await frame.evaluate(f"""
+		                                () => {{
+		                                    const elements = document.elementsFromPoint({x}, {y});
+		                                    return elements.map(e => e.className || e.tagName);
+		                                }}
+		                            """)
+									logger.info(f"Check overlay attempt {attempt + 1}: {elements_above}")
 
-							# OPTIONAL: Pause for manual check
-							# await page.pause()
+									blocking = [el for el in elements_above if
+												'dx-overlay-shader' in el or 'dx-popup-wrapper' in el]
+									if not blocking:
+										break
 
-							# 4. Check visibility/interactability
+									await asyncio.sleep(0.5)
+									attempt += 1
+
+								if attempt == max_attempts:
+									logger.error("Overlay is still blocking after multiple attempts!")
+									return ActionResult(error="Dropdown option blocked by overlay",
+														include_in_memory=True)
+
 							is_visible = await option_locator.is_visible()
 							is_interactable = await option_locator.is_enabled()
 							if is_visible and is_interactable:
