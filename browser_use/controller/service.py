@@ -396,7 +396,6 @@ class Controller:
 					try:
 						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
 
-						# Valutiamo se l'elemento esiste come un dropdown (select o combobox)
 						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
@@ -422,23 +421,27 @@ class Controller:
                             """, xpath
 						)
 
-						# Se l'elemento non è stato trovato, passiamo al prossimo frame
+
 						if not dropdown_info.get('found'):
 							logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
 							continue
 
 						logger.debug(f'Found dropdown in frame {frame_index}: {dropdown_info}')
 
-						# Selezioniamo l'opzione nel dropdown
+						locator = frame.locator(xpath)
+						visible_locator = locator.locator(
+							":visible:not([style*='pointer-events: none']):not([style*='visibility: hidden']):not([style*='display: none'])")
+
+
 						if dropdown_info['type'] == 'select':
-							selected_option_values = await frame.locator(xpath).nth(0).select_option(label=text,
-																									 timeout=1000)
+							selected_option_values = await visible_locator.nth(0).select_option(label=text,
+																								timeout=1000)
 						elif dropdown_info['type'] == 'combobox':
-							# Gestiamo la selezione in un combobox
-							selected_option_values = await frame.locator(xpath).locator(
+
+							selected_option_values = await visible_locator.locator(
 								f'option[aria-label="{text}"]').click(timeout=1000)
 
-						# Log dell'azione effettuata
+
 						msg = f'Selected option {text} with value {selected_option_values}'
 						logger.info(msg + f' in frame {frame_index}')
 
@@ -448,8 +451,7 @@ class Controller:
 						logger.error(f"Error processing frame {frame_index}: {str(e)}")
 						continue
 
-					frame_index += 1
-
+				frame_index += 1
 			except Exception as e:
 				logger.error(f"An error occurred: {str(e)}")
 				return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
