@@ -404,7 +404,6 @@ class Controller:
                                         XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
                                     if (!element) return {found: false};
 
-                                    // Controlliamo se è un elemento <select> o un combobox (aria-role)
                                     if (element.tagName.toLowerCase() === 'select') {
                                         return { type: 'select', found: true };
                                     }
@@ -421,26 +420,26 @@ class Controller:
                             """, xpath
 						)
 
-
 						if not dropdown_info.get('found'):
 							logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
 							continue
 
 						logger.debug(f'Found dropdown in frame {frame_index}: {dropdown_info}')
 
-						locator = frame.locator(xpath)
-						visible_locator = locator.locator(
-							":visible:not([style*='pointer-events: none']):not([style*='visibility: hidden']):not([style*='display: none'])")
+						dropdown_locator = frame.locator(xpath)
+						await dropdown_locator.wait_for(state="visible", timeout=5000)
 
+						if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
+							await dropdown_locator.click()
+						else:
+							logger.error("Dropdown not ready for interaction.")
 
 						if dropdown_info['type'] == 'select':
-							selected_option_values = await visible_locator.nth(0).select_option(label=text,
-																								timeout=1000)
+							selected_option_values = await dropdown_locator.nth(0).select_option(label=text,
+																								 timeout=10000)
 						elif dropdown_info['type'] == 'combobox':
-
-							selected_option_values = await visible_locator.locator(
-								f'option[aria-label="{text}"]').click(timeout=1000)
-
+							selected_option_values = await dropdown_locator.locator(
+								f'option[aria-label="{text}"]').click(timeout=10000)
 
 						msg = f'Selected option {text} with value {selected_option_values}'
 						logger.info(msg + f' in frame {frame_index}')
@@ -452,6 +451,7 @@ class Controller:
 						continue
 
 				frame_index += 1
+
 			except Exception as e:
 				logger.error(f"An error occurred: {str(e)}")
 				return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
