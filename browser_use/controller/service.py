@@ -382,19 +382,18 @@ class Controller:
 				text: str,
 				browser: BrowserContext,
 		) -> ActionResult:
-			"""Select dropdown option for select or combobox by option text"""
 			page = await browser.get_current_page()
 			selector_map = await browser.get_selector_map()
 			dom_element = selector_map[index]
 
-			logger.debug(f"Attempting to select '{text}' using xpath: {dom_element.xpath}")
+			logger.info(f"[START] Attempting to select '{text}' using xpath: {dom_element.xpath}")
 			xpath = '//' + dom_element.xpath
 
 			try:
 				frame_index = 0
 				for frame in page.frames:
 					try:
-						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
+						logger.info(f"[FRAME {frame_index}] URL: {frame.url}")
 
 						dropdown_info = await frame.evaluate(
 							"""
@@ -421,39 +420,63 @@ class Controller:
 						)
 
 						if not dropdown_info.get('found'):
-							logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
+							logger.warning(
+								f"[FRAME {frame_index}] Dropdown not found. Error: {dropdown_info.get('error')}")
+							frame_index += 1
 							continue
 
-						logger.debug(f'Found dropdown in frame {frame_index}: {dropdown_info}')
+						logger.info(f"[FRAME {frame_index}] Dropdown found: {dropdown_info}")
 
 						dropdown_locator = frame.locator(xpath)
+						logger.info(f"[FRAME {frame_index}] Waiting for dropdown to be visible")
 						await dropdown_locator.wait_for(state="visible", timeout=5000)
 
 						if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
+							logger.info(f"[FRAME {frame_index}] Clicking dropdown to open")
 							await dropdown_locator.click()
+							await page.wait_for_timeout(500)
 						else:
-							logger.error("Dropdown not ready for interaction.")
+							logger.error(f"[FRAME {frame_index}] Dropdown not ready for interaction")
+							frame_index += 1
+							continue
 
-						if dropdown_info['type'] == 'select':
-							selected_option_values = await dropdown_locator.nth(0).select_option(label=text,
-																								 timeout=10000)
-						elif dropdown_info['type'] == 'combobox':
-							selected_option_values = await dropdown_locator.locator(
-								f'option[aria-label="{text}"]').click(timeout=10000)
+						options_locator = frame.locator(f"{xpath}//option, {xpath} [role='option']")
+						logger.info(f"[FRAME {frame_index}] Waiting for dropdown options to be visible")
+						await options_locator.first.wait_for(state="visible", timeout=5000)
 
-						msg = f'Selected option {text} with value {selected_option_values}'
-						logger.info(msg + f' in frame {frame_index}')
+						max_attempts = 2
+						attempt = 0
+						while attempt < max_attempts:
+							try:
+								logger.info(f"[FRAME {frame_index}] Attempt {attempt + 1} to select '{text}'")
+								if dropdown_info['type'] == 'select':
+									selected_option_values = await dropdown_locator.nth(0).select_option(label=text,
+																										 timeout=10000)
+								elif dropdown_info['type'] == 'combobox':
+									option_locator = dropdown_locator.locator(f'option[aria-label="{text}"]')
+									logger.info(
+										f"[FRAME {frame_index}] Waiting for combobox option '{text}' to be visible")
+									await option_locator.wait_for(state="visible", timeout=5000)
+									selected_option_values = await option_locator.click(timeout=10000)
 
-						return ActionResult(extracted_content=msg, include_in_memory=True)
+								msg = f"[FRAME {frame_index}] SUCCESS: Selected option '{text}' with value {selected_option_values}"
+								logger.info(msg)
+								return ActionResult(extracted_content=msg, include_in_memory=True)
+							except Exception as e:
+								logger.warning(f"[FRAME {frame_index}] Attempt {attempt + 1} failed: {str(e)}")
+								await page.wait_for_timeout(500)
+								attempt += 1
 
+						logger.error(f"[FRAME {frame_index}] All selection attempts failed")
 					except Exception as e:
-						logger.error(f"Error processing frame {frame_index}: {str(e)}")
-						continue
+						logger.error(f"[FRAME {frame_index}] Error processing frame: {str(e)}")
+					frame_index += 1
 
-				frame_index += 1
+				logger.error(f"[END] Dropdown option '{text}' could not be selected in any frame")
+				return ActionResult(extracted_content=f"Failed to select option '{text}'", include_in_memory=False)
 
 			except Exception as e:
-				logger.error(f"An error occurred: {str(e)}")
+				logger.error(f"[GLOBAL ERROR] {str(e)}")
 				return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
 
 	def action(self, description: str, **kwargs):
