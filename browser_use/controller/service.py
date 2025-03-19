@@ -270,13 +270,12 @@ class Controller:
 			description='Get all options from a native dropdown',
 		)
 		async def get_dropdown_options(index: int, browser: BrowserContext) -> ActionResult:
-			"""Get all options from a native dropdown"""
+			"""Get all options from a native dropdown or role=combobox"""
 			page = await browser.get_current_page()
 			selector_map = await browser.get_selector_map()
 			dom_element = selector_map[index]
 
 			try:
-				# Frame-aware approach since we know it works
 				all_options = []
 				frame_index = 0
 
@@ -284,32 +283,57 @@ class Controller:
 					try:
 						options = await frame.evaluate(
 							"""
-							(xpath) => {
-								const select = document.evaluate(xpath, document, null,
-									XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-								if (!select) return null;
+                            (xpath) => {
+                                const element = document.evaluate(xpath, document, null,
+                                    XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                                if (!element) return null;
 
-								return {
-									options: Array.from(select.options).map(opt => ({
-										text: opt.text, //do not trim, because we are doing exact match in select_dropdown_option
-										value: opt.value,
-										index: opt.index
-									})),
-									id: select.id,
-									name: select.name
-								};
-							}
-						""",
+                                // Native select
+                                if (element.tagName.toLowerCase() === 'select') {
+                                    return {
+                                        options: Array.from(element.options).map(opt => ({
+                                            text: opt.text,
+                                            value: opt.value,
+                                            index: opt.index
+                                        })),
+                                        id: element.id,
+                                        name: element.name,
+                                        type: 'select'
+                                    };
+                                }
+
+                                // Role=combobox
+                                if (element.getAttribute('role') === 'combobox') {
+                                    let items = [];
+                                    // Try common patterns: aria-controls points to a listbox
+                                    const listboxId = element.getAttribute('aria-controls');
+                                    if (listboxId) {
+                                        const listbox = document.getElementById(listboxId);
+                                        if (listbox) {
+                                            items = Array.from(listbox.querySelectorAll('[role="option"]')).map((opt, idx) => ({
+                                                text: opt.innerText.trim(),
+                                                value: opt.getAttribute('value') || opt.innerText.trim(),
+                                                index: idx
+                                            }));
+                                        }
+                                    }
+                                    return {
+                                        options: items,
+                                        id: element.id,
+                                        name: element.getAttribute('name'),
+                                        type: 'combobox'
+                                    };
+                                }
+                                return null;
+                            }
+                            """,
 							dom_element.xpath,
 						)
 
-						if options:
-							logger.debug(f'Found dropdown in frame {frame_index}')
-							logger.debug(f'Dropdown ID: {options["id"]}, Name: {options["name"]}')
-
+						if options and options['options']:
+							logger.debug(f'Found dropdown in frame {frame_index} - Type: {options["type"]}')
 							formatted_options = []
 							for opt in options['options']:
-								# encoding ensures AI uses the exact string in select_dropdown_option
 								encoded_text = json.dumps(opt['text'])
 								formatted_options.append(f'{opt["index"]}: text={encoded_text}')
 
@@ -326,7 +350,7 @@ class Controller:
 					logger.info(msg)
 					return ActionResult(extracted_content=msg, include_in_memory=True)
 				else:
-					msg = 'No options found in any frame for dropdown'
+					msg = 'No options found in any frame for dropdown or combobox'
 					logger.info(msg)
 					return ActionResult(extracted_content=msg, include_in_memory=True)
 
@@ -340,25 +364,16 @@ class Controller:
 			description='Select dropdown option for interactive element index by the text of the option you want to select',
 		)
 		async def select_dropdown_option(
-			index: int,
-			text: str,
-			browser: BrowserContext,
+				index: int,
+				text: str,
+				browser: BrowserContext,
 		) -> ActionResult:
-			"""Select dropdown option by the text of the option you want to select"""
+			"""Select dropdown option for select or combobox by option text"""
 			page = await browser.get_current_page()
 			selector_map = await browser.get_selector_map()
 			dom_element = selector_map[index]
 
-			# Validate that we're working with a select element
-			if dom_element.tag_name != 'select':
-				logger.error(f'Element is not a select! Tag: {dom_element.tag_name}, Attributes: {dom_element.attributes}')
-				msg = f'Cannot select option: Element with index {index} is a {dom_element.tag_name}, not a select'
-				return ActionResult(extracted_content=msg, include_in_memory=True)
-
 			logger.debug(f"Attempting to select '{text}' using xpath: {dom_element.xpath}")
-			logger.debug(f'Element attributes: {dom_element.attributes}')
-			logger.debug(f'Element tag: {dom_element.tag_name}')
-
 			xpath = '//' + dom_element.xpath
 
 			try:
@@ -367,58 +382,62 @@ class Controller:
 					try:
 						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
 
-						# First verify we can find the dropdown in this frame
-						find_dropdown_js = """
-							(xpath) => {
-								try {
-									const select = document.evaluate(xpath, document, null,
-										XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-									if (!select) return null;
-									if (select.tagName.toLowerCase() !== 'select') {
-										return {
-											error: `Found element but it's a ${select.tagName}, not a SELECT`,
-											found: false
-										};
-									}
-									return {
-										id: select.id,
-										name: select.name,
-										found: true,
-										tagName: select.tagName,
-										optionCount: select.options.length,
-										currentValue: select.value,
-										availableOptions: Array.from(select.options).map(o => o.text.trim())
-									};
-								} catch (e) {
-									return {error: e.toString(), found: false};
-								}
-							}
-						"""
+						dropdown_info = await frame.evaluate(
+							"""
+                            (xpath) => {
+                                try {
+                                    const element = document.evaluate(xpath, document, null,
+                                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                                    if (!element) return {found: false};
 
-						dropdown_info = await frame.evaluate(find_dropdown_js, dom_element.xpath)
+                                    if (element.tagName.toLowerCase() === 'select') {
+                                        return { type: 'select', found: true };
+                                    }
 
-						if dropdown_info:
-							if not dropdown_info.get('found'):
-								logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
-								continue
+                                    if (element.getAttribute('role') === 'combobox') {
+                                        return { type: 'combobox', found: true };
+                                    }
 
-							logger.debug(f'Found dropdown in frame {frame_index}: {dropdown_info}')
+                                    return { found: false };
+                                } catch (e) {
+                                    return { error: e.toString(), found: false };
+                                }
+                            }
+                            """,
+							dom_element.xpath
+						)
 
-							# "label" because we are selecting by text
-							# nth(0) to disable error thrown by strict mode
-							# timeout=1000 because we are already waiting for all network events, therefore ideally we don't need to wait a lot here (default 30s)
+						if not dropdown_info.get('found'):
+							logger.debug(f'Element not found in frame {frame_index}')
+							continue
+
+						if dropdown_info['type'] == 'select':
+							# Native select
 							selected_option_values = (
-								await frame.locator('//' + dom_element.xpath).nth(0).select_option(label=text, timeout=1000)
+								await frame.locator(xpath).nth(0).select_option(label=text, timeout=1000)
 							)
+							msg = f'Selected option {text} with value {selected_option_values} (native select)'
+							logger.info(msg)
+							return ActionResult(extracted_content=msg, include_in_memory=True)
 
-							msg = f'selected option {text} with value {selected_option_values}'
-							logger.info(msg + f' in frame {frame_index}')
+						elif dropdown_info['type'] == 'combobox':
+							# Custom combobox: open, then click desired option
+							locator = frame.locator(xpath).nth(0)
+							await locator.click()  # Open combobox
 
+							# Wait for options to appear (basic timeout)
+							await frame.wait_for_selector('[role="option"]', timeout=2000)
+
+							# Locate and click matching option
+							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
+							await option_locator.click()
+
+							msg = f'Selected option {text} in combobox'
+							logger.info(msg)
 							return ActionResult(extracted_content=msg, include_in_memory=True)
 
 					except Exception as frame_e:
 						logger.error(f'Frame {frame_index} attempt failed: {str(frame_e)}')
-						logger.error(f'Frame type: {type(frame)}')
 						logger.error(f'Frame URL: {frame.url}')
 
 					frame_index += 1
