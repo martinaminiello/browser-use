@@ -270,7 +270,7 @@ class Controller:
 			description='Get all options from a native dropdown',
 		)
 		async def get_dropdown_options(index: int, browser: BrowserContext) -> ActionResult:
-			"""Get all options from a native dropdown or role=combobox"""
+			"""Get all options from a native dropdown or role=combobox, including dynamic popups"""
 			page = await browser.get_current_page()
 			selector_map = await browser.get_selector_map()
 			dom_element = selector_map[index]
@@ -281,68 +281,82 @@ class Controller:
 
 				for frame in page.frames:
 					try:
-						options = await frame.evaluate(
+						logger.debug(f"Checking frame {frame_index}: {frame.url}")
+
+						# Evaluate type of element
+						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
                                 const element = document.evaluate(xpath, document, null,
                                     XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-                                if (!element) return null;
+                                if (!element) return { found: false };
 
-                                // Native select
                                 if (element.tagName.toLowerCase() === 'select') {
-                                    return {
-                                        options: Array.from(element.options).map(opt => ({
-                                            text: opt.text,
-                                            value: opt.value,
-                                            index: opt.index
-                                        })),
-                                        id: element.id,
-                                        name: element.name,
-                                        type: 'select'
-                                    };
+                                    return { type: 'select', found: true };
                                 }
 
-                                // Role=combobox
                                 if (element.getAttribute('role') === 'combobox') {
-                                    let items = [];
-                                    // Try common patterns: aria-controls points to a listbox
-                                    const listboxId = element.getAttribute('aria-controls');
-                                    if (listboxId) {
-                                        const listbox = document.getElementById(listboxId);
-                                        if (listbox) {
-                                            items = Array.from(listbox.querySelectorAll('[role="option"]')).map((opt, idx) => ({
-                                                text: opt.innerText.trim(),
-                                                value: opt.getAttribute('value') || opt.innerText.trim(),
-                                                index: idx
-                                            }));
-                                        }
-                                    }
-                                    return {
-                                        options: items,
-                                        id: element.id,
-                                        name: element.getAttribute('name'),
-                                        type: 'combobox'
-                                    };
+                                    return { type: 'combobox', found: true };
                                 }
-                                return null;
+
+                                return { found: false };
                             }
                             """,
 							dom_element.xpath,
 						)
 
-						if options and options['options']:
-							logger.debug(f'Found dropdown in frame {frame_index} - Type: {options["type"]}')
-							formatted_options = []
-							for opt in options['options']:
-								encoded_text = json.dumps(opt['text'])
-								formatted_options.append(f'{opt["index"]}: text={encoded_text}')
+						if not dropdown_info.get('found'):
+							logger.debug(f"No dropdown found in frame {frame_index}")
+							frame_index += 1
+							continue
 
-							all_options.extend(formatted_options)
+						# === Native SELECT ===
+						if dropdown_info['type'] == 'select':
+							logger.debug("Native select detected")
+							options = await frame.evaluate(
+								"""
+                                (xpath) => {
+                                    const element = document.evaluate(xpath, document, null,
+                                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                                    return Array.from(element.options).map(opt => ({
+                                        text: opt.text,
+                                        value: opt.value,
+                                        index: opt.index
+                                    }));
+                                }
+                                """,
+								dom_element.xpath,
+							)
+							for opt in options:
+								all_options.append(f'{opt["index"]}: text={json.dumps(opt["text"])}')
+
+						# === Custom COMBOBOX ===
+						elif dropdown_info['type'] == 'combobox':
+							logger.debug("Combobox detected, attempting to open popup")
+							locator = frame.locator(f'//{dom_element.xpath}').nth(0)
+							await locator.click()
+							await frame.wait_for_timeout(300)  # allow animation
+
+							# Wait for popup content
+							await frame.wait_for_selector('[role="option"], .dx-list-item', timeout=3000)
+
+							# Extract options from popup
+							option_elements = await frame.locator('[role="option"], .dx-list-item').all()
+							logger.debug(f'Found {len(option_elements)} options in popup')
+
+							for idx, opt_elem in enumerate(option_elements):
+								text = await opt_elem.inner_text()
+								all_options.append(f'{idx}: text={json.dumps(text.strip())}')
+
+							# Optionally: close popup by clicking outside (if needed)
+							await frame.keyboard.press("Escape")
+							await frame.wait_for_timeout(300)
+
+						frame_index += 1
 
 					except Exception as frame_e:
 						logger.debug(f'Frame {frame_index} evaluation failed: {str(frame_e)}')
-
-					frame_index += 1
+						frame_index += 1
 
 				if all_options:
 					msg = '\n'.join(all_options)
@@ -382,6 +396,7 @@ class Controller:
 					try:
 						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
 
+						# Check element type
 						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
@@ -411,8 +426,8 @@ class Controller:
 							logger.debug(f'Element not found in frame {frame_index}')
 							continue
 
+						# === Native SELECT ===
 						if dropdown_info['type'] == 'select':
-							# Native select
 							selected_option_values = (
 								await frame.locator(xpath).nth(0).select_option(label=text, timeout=1000)
 							)
@@ -420,21 +435,41 @@ class Controller:
 							logger.info(msg)
 							return ActionResult(extracted_content=msg, include_in_memory=True)
 
+						# === Custom COMBOBOX ===
 						elif dropdown_info['type'] == 'combobox':
-							# Custom combobox: open, then click desired option
 							locator = frame.locator(xpath).nth(0)
 							await locator.click()  # Open combobox
+							logger.debug('Clicked combobox to open options')
 
-							# Wait for options to appear (basic timeout)
-							await frame.wait_for_selector('[role="option"]', timeout=2000)
+							# Wait for DevExtreme popup overlay
+							await frame.wait_for_selector('.dx-overlay-wrapper.dx-popup-wrapper', timeout=3000)
+							logger.debug('Popup detected, waiting for options')
 
-							# Locate and click matching option
+							# Mini delay to ensure animations complete
+							await frame.wait_for_timeout(300)
+
+							# Wait for at least one role="option"
+							await frame.wait_for_selector('[role="option"]', timeout=3000)
+
+							# Locate the desired option
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
-							await option_locator.click()
+							await option_locator.wait_for(state='visible', timeout=2000)
 
-							msg = f'Selected option {text} in combobox'
-							logger.info(msg)
-							return ActionResult(extracted_content=msg, include_in_memory=True)
+							try:
+								# First attempt: normal click
+								await option_locator.click(timeout=2000)
+								msg = f'Selected option {text} in combobox (normal click)'
+								logger.info(msg)
+								return ActionResult(extracted_content=msg, include_in_memory=True)
+							except Exception as click_e:
+								logger.warning(f'Normal click failed due to overlay or obstruction: {click_e}')
+								logger.info(f'Trying forced click for option: {text}')
+
+								# Second attempt: force click
+								await option_locator.click(timeout=2000, force=True)
+								msg = f'Force-clicked option {text} in combobox'
+								logger.info(msg)
+								return ActionResult(extracted_content=msg, include_in_memory=True)
 
 					except Exception as frame_e:
 						logger.error(f'Frame {frame_index} attempt failed: {str(frame_e)}')
