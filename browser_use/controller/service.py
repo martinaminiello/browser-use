@@ -396,6 +396,7 @@ class Controller:
 					try:
 						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
 
+						# Valutiamo se l'elemento esiste come un dropdown (select o combobox)
 						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
@@ -404,6 +405,7 @@ class Controller:
                                         XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
                                     if (!element) return {found: false};
 
+                                    // Controlliamo se è un elemento <select> o un combobox (aria-role)
                                     if (element.tagName.toLowerCase() === 'select') {
                                         return { type: 'select', found: true };
                                     }
@@ -417,85 +419,40 @@ class Controller:
                                     return { error: e.toString(), found: false };
                                 }
                             }
-                            """,
-							dom_element.xpath
+                            """, xpath
 						)
 
+						# Se l'elemento non è stato trovato, passiamo al prossimo frame
 						if not dropdown_info.get('found'):
-							logger.debug(f'Element not found in frame {frame_index}')
+							logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
 							continue
 
+						logger.debug(f'Found dropdown in frame {frame_index}: {dropdown_info}')
+
+						# Selezioniamo l'opzione nel dropdown
 						if dropdown_info['type'] == 'select':
-							selected_option_values = (
-								await frame.locator(xpath).nth(0).select_option(label=text, timeout=1000)
-							)
-							msg = f'Selected option {text} with value {selected_option_values} (native select)'
-							logger.info(msg)
-							return ActionResult(extracted_content=msg, include_in_memory=True)
-
+							selected_option_values = await frame.locator(xpath).nth(0).select_option(label=text,
+																									 timeout=1000)
 						elif dropdown_info['type'] == 'combobox':
-							locator = frame.locator(xpath).nth(0)
-							await locator.click()
+							# Gestiamo la selezione in un combobox
+							selected_option_values = await frame.locator(xpath).locator(
+								f'option[aria-label="{text}"]').click(timeout=1000)
 
-							await frame.wait_for_selector('[role="option"]', timeout=3000)
-							await frame.wait_for_selector('.dx-overlay-shader', state='detached', timeout=5000)
+						# Log dell'azione effettuata
+						msg = f'Selected option {text} with value {selected_option_values}'
+						logger.info(msg + f' in frame {frame_index}')
 
-							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
+						return ActionResult(extracted_content=msg, include_in_memory=True)
 
-							# Check for overlay elements before clicking
-							max_attempts = 10
-							attempt = 0
-							box = await option_locator.bounding_box()
-							if box:
-								x = box["x"] + box["width"] / 2
-								y = box["y"] + box["height"] / 2
-
-								while attempt < max_attempts:
-									elements_above = await frame.evaluate(f"""
-		                                () => {{
-		                                    const elements = document.elementsFromPoint({x}, {y});
-		                                    return elements.map(e => e.className || e.tagName);
-		                                }}
-		                            """)
-									logger.info(f"Overlay check attempt {attempt + 1}: {elements_above}")
-
-									blocking = [el for el in elements_above if
-												'dx-overlay-shader' in el or 'dx-popup-wrapper' in el]
-									if not blocking:
-										break
-
-									await asyncio.sleep(0.3)
-									attempt += 1
-
-								if attempt == max_attempts:
-									logger.error("Overlay is still blocking after multiple attempts!")
-									return ActionResult(error="Dropdown option blocked by overlay",
-														include_in_memory=True)
-
-							# Ensure the option is visible and ready
-							await option_locator.wait_for(state="visible", timeout=3000)
-							await option_locator.wait_for(state="attached", timeout=3000)
-
-							await option_locator.click()
-
-							msg = f'Selected option {text} in combobox'
-							logger.info(msg)
-							return ActionResult(extracted_content=msg, include_in_memory=True)
-
-					except Exception as frame_e:
-						logger.error(f'Frame {frame_index} attempt failed: {str(frame_e)}')
-						logger.error(f'Frame URL: {frame.url}')
+					except Exception as e:
+						logger.error(f"Error processing frame {frame_index}: {str(e)}")
+						continue
 
 					frame_index += 1
 
-				msg = f"Could not select option '{text}' in any frame"
-				logger.info(msg)
-				return ActionResult(extracted_content=msg, include_in_memory=True)
-
 			except Exception as e:
-				msg = f'Selection failed: {str(e)}'
-				logger.error(msg)
-				return ActionResult(error=msg, include_in_memory=True)
+				logger.error(f"An error occurred: {str(e)}")
+				return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
 
 	def action(self, description: str, **kwargs):
 		"""Decorator for registering custom actions
