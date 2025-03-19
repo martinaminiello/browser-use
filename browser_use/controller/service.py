@@ -378,7 +378,7 @@ class Controller:
 			description='Select dropdown option for interactive element index by the text of the option you want to select',
 		)
 
-
+	
 
 		async def select_dropdown_option(
 				index: int,
@@ -454,7 +454,15 @@ class Controller:
 							# 3. Explicitly wait for desired option to be visible & stable
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
 							await option_locator.wait_for(state="visible", timeout=3000)
-							await option_locator.click(force=True)
+
+							# 🟢 4. Add a check for element interactability and visibility before clicking
+							is_visible = await option_locator.is_visible()
+							is_interactable = await option_locator.is_enabled()
+							if is_visible and is_interactable:
+								await option_locator.click(force=True)
+							else:
+								logger.error(f"Option '{text}' is not visible or interactable.")
+								return ActionResult(error=f"Option '{text}' not interactable", include_in_memory=True)
 
 							msg = f'Selected option {text} in combobox'
 							logger.info(msg)
