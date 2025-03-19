@@ -396,7 +396,6 @@ class Controller:
 					try:
 						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
 
-						# Check element type
 						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
@@ -426,8 +425,8 @@ class Controller:
 							logger.debug(f'Element not found in frame {frame_index}')
 							continue
 
-						# === Native SELECT ===
 						if dropdown_info['type'] == 'select':
+							# Native select
 							selected_option_values = (
 								await frame.locator(xpath).nth(0).select_option(label=text, timeout=1000)
 							)
@@ -435,41 +434,24 @@ class Controller:
 							logger.info(msg)
 							return ActionResult(extracted_content=msg, include_in_memory=True)
 
-						# === Custom COMBOBOX ===
 						elif dropdown_info['type'] == 'combobox':
+							# Custom combobox: open, then click desired option
 							locator = frame.locator(xpath).nth(0)
 							await locator.click()  # Open combobox
-							logger.debug('Clicked combobox to open options')
 
-							# Wait for DevExtreme popup overlay
-							await frame.wait_for_selector('.dx-overlay-wrapper.dx-popup-wrapper', timeout=3000)
-							logger.debug('Popup detected, waiting for options')
-
-							# Mini delay to ensure animations complete
-							await frame.wait_for_timeout(300)
-
-							# Wait for at least one role="option"
+							# 1. Wait for options to be visible
 							await frame.wait_for_selector('[role="option"]', timeout=3000)
 
-							# Locate the desired option
+							# 2. Wait until overlay shader disappears
+							await frame.wait_for_selector('.dx-overlay-shader', state='detached', timeout=5000)
+
+							# 3. Locate and click matching option
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
-							await option_locator.wait_for(state='visible', timeout=2000)
+							await option_locator.click()
 
-							try:
-								# First attempt: normal click
-								await option_locator.click(timeout=2000)
-								msg = f'Selected option {text} in combobox (normal click)'
-								logger.info(msg)
-								return ActionResult(extracted_content=msg, include_in_memory=True)
-							except Exception as click_e:
-								logger.warning(f'Normal click failed due to overlay or obstruction: {click_e}')
-								logger.info(f'Trying forced click for option: {text}')
-
-								# Second attempt: force click
-								await option_locator.click(timeout=2000, force=True)
-								msg = f'Force-clicked option {text} in combobox'
-								logger.info(msg)
-								return ActionResult(extracted_content=msg, include_in_memory=True)
+							msg = f'Selected option {text} in combobox'
+							logger.info(msg)
+							return ActionResult(extracted_content=msg, include_in_memory=True)
 
 					except Exception as frame_e:
 						logger.error(f'Frame {frame_index} attempt failed: {str(frame_e)}')
