@@ -439,12 +439,10 @@ class Controller:
 
 							await frame.wait_for_selector('[role="option"]', timeout=3000)
 							await frame.wait_for_selector('.dx-overlay-shader', state='detached', timeout=5000)
-							await asyncio.sleep(0.3)
 
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")').first
-							await option_locator.wait_for(state="visible", timeout=3000)
 
-							# Ensure no overlay blocks the click
+							# Check for overlay elements before clicking
 							max_attempts = 10
 							attempt = 0
 							box = await option_locator.bounding_box()
@@ -459,14 +457,14 @@ class Controller:
 		                                    return elements.map(e => e.className || e.tagName);
 		                                }}
 		                            """)
-									logger.info(f"Check overlay attempt {attempt + 1}: {elements_above}")
+									logger.info(f"Overlay check attempt {attempt + 1}: {elements_above}")
 
 									blocking = [el for el in elements_above if
 												'dx-overlay-shader' in el or 'dx-popup-wrapper' in el]
 									if not blocking:
 										break
 
-									await asyncio.sleep(0.5)
+									await asyncio.sleep(0.3)
 									attempt += 1
 
 								if attempt == max_attempts:
@@ -474,13 +472,11 @@ class Controller:
 									return ActionResult(error="Dropdown option blocked by overlay",
 														include_in_memory=True)
 
-							is_visible = await option_locator.is_visible()
-							is_interactable = await option_locator.is_enabled()
-							if is_visible and is_interactable:
-								await option_locator.click(force=True)
-							else:
-								logger.error(f"Option '{text}' is not visible or interactable.")
-								return ActionResult(error=f"Option '{text}' not interactable", include_in_memory=True)
+							# Ensure the option is visible and ready
+							await option_locator.wait_for(state="visible", timeout=3000)
+							await option_locator.wait_for(state="attached", timeout=3000)
+
+							await option_locator.click()
 
 							msg = f'Selected option {text} in combobox'
 							logger.info(msg)
