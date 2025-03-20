@@ -393,7 +393,7 @@ class Controller:
 			try:
 				for frame_index, frame in enumerate(page.frames):
 					try:
-						# Verifica se l'elemento è un 'select' o 'combobox'
+					
 						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
@@ -422,10 +422,10 @@ class Controller:
 						dropdown_locator = frame.locator(xpath)
 						await dropdown_locator.wait_for(state="visible", timeout=5000)
 
-						if not (await dropdown_locator.is_visible() and await dropdown_locator.is_enabled()):
+						if not await dropdown_locator.is_visible():
 							continue
 
-						
+
 						if dropdown_info['type'] == 'select':
 							await dropdown_locator.select_option(label=text, timeout=10000)
 
@@ -435,7 +435,7 @@ class Controller:
 							option_locator = frame.locator(f'[role="option"]:has-text("{text}")')
 							await option_locator.wait_for(state="visible", timeout=5000)
 
-							if await option_locator.is_visible() and await option_locator.is_enabled():
+							if await option_locator.is_visible():
 								await option_locator.click(force=True)
 
 						msg = f'Selected option "{text}" in frame {frame_index}'
