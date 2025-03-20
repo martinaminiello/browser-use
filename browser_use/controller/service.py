@@ -377,25 +377,22 @@ class Controller:
 		@self.registry.action(
 			description='Select dropdown option for interactive element index by the text of the option you want to select',
 		)
+		@self.registry.action(
+			description='Select dropdown option for interactive element index by the text of the option you want to select',
+		)
 		async def select_dropdown_option(
 				index: int,
 				text: str,
 				browser: BrowserContext,
 		) -> ActionResult:
-			"""Select dropdown option for select or combobox by option text"""
-
 			page = await browser.get_current_page()
 			selector_map = await browser.get_selector_map()
 			dom_element = selector_map[index]
-
-			logger.debug(f"Attempting to select '{text}' using xpath: {dom_element.xpath}")
 			xpath = dom_element.xpath if dom_element.xpath.startswith('//') else '//' + dom_element.xpath
 
 			try:
 				for frame_index, frame in enumerate(page.frames):
 					try:
-						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
-
 						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
@@ -403,15 +400,12 @@ class Controller:
                                     const element = document.evaluate(xpath, document, null,
                                         XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
                                     if (!element) return {found: false};
-
                                     if (element.tagName.toLowerCase() === 'select') {
                                         return { type: 'select', found: true };
                                     }
-
                                     if (element.getAttribute('role') === 'combobox') {
                                         return { type: 'combobox', found: true };
                                     }
-
                                     return { found: false };
                                 } catch (e) {
                                     return { error: e.toString(), found: false };
@@ -422,62 +416,36 @@ class Controller:
 						)
 
 						if not dropdown_info.get('found'):
-							logger.debug(f'No dropdown found in frame {frame_index}')
 							continue
-
-						logger.debug(f'Found dropdown in frame {frame_index}: {dropdown_info}')
 
 						dropdown_locator = frame.locator(xpath)
 						await dropdown_locator.wait_for(state="visible", timeout=5000)
 
 						if not (await dropdown_locator.is_visible() and await dropdown_locator.is_enabled()):
-							logger.error("Dropdown not ready for interaction.")
 							continue
 
 						if dropdown_info['type'] == 'select':
-							logger.debug("Interacting with native <select>")
 							await dropdown_locator.select_option(label=text, timeout=10000)
 
 						elif dropdown_info['type'] == 'combobox':
-							logger.debug("Interacting with custom combobox")
-							await dropdown_locator.click()
 
-							option_locator = frame.locator('[role="option"], .dx-list-item')
-							await option_locator.first.wait_for(state="visible", timeout=3000)
+							await get_dropdown_options(index, browser)
+							option_locator= frame.locator(f'[role="option"]:has-text("{text}")')
+							await option_locator.click(force=True)
 
-							count = await option_locator.count()
-							logger.debug(f"Found {count} options in combobox")
 
-							found = False
-							for i in range(count):
-								option_elem = option_locator.nth(i)
-								option_text = (await option_elem.inner_text()).strip()
-								logger.debug(f"Option {i}: '{option_text}'")
-								if option_text == text:
-									await option_elem.click()
-									logger.info(f"Clicked option '{option_text}' in frame {frame_index}")
-									found = True
-									break
 
-							if not found:
-								msg = f"Option '{text}' not found in combobox"
-								logger.error(msg)
-								return ActionResult(extracted_content=msg, include_in_memory=False)
 
 						msg = f'Selected option "{text}" in frame {frame_index}'
-						logger.info(msg)
 						return ActionResult(extracted_content=msg, include_in_memory=True)
 
 					except Exception as e:
-						logger.error(f"Error processing frame {frame_index}: {str(e)}")
 						continue
 
 				msg = f"Dropdown or option '{text}' not found in any frame"
-				logger.error(msg)
 				return ActionResult(extracted_content=msg, include_in_memory=False)
 
 			except Exception as e:
-				logger.error(f"An error occurred: {str(e)}")
 				return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
 
 	def action(self, description: str, **kwargs):
