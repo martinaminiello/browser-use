@@ -372,49 +372,58 @@ class Controller:
                         dropdown_locator = frame.locator(xpath)
                         await dropdown_locator.wait_for(state="visible", timeout=5000)
 
+                        # 🔥 FIX 1: Aspetta che l'overlay sparisca
+                        try:
+                            await frame.locator(".dx-overlay-shader").wait_for(state="hidden", timeout=5000)
+                        except Exception:
+                            # Se non esiste, ignora
+                            pass
+
                         if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
+                            # Clicca il dropdown
                             await dropdown_locator.click(force=True)
+
+                            # 🔥 FIX 2: Aspetta che il dropdown sia aperto visibilmente
                             await frame.wait_for_function("""
                                 () => {
-                                    const blockers = Array.from(document.querySelectorAll('*'))
-                                        .filter(el => {
-                                            const style = window.getComputedStyle(el);
-                                            return style.visibility !== 'hidden'
-                                                && style.opacity !== '0'
-                                                && style.pointerEvents !== 'none'
-                                                && (style.position === 'fixed' || style.position === 'absolute')
-                                                && el.offsetParent !== null
-                                                && el.offsetWidth > 0 && el.offsetHeight > 0;
-                                        });
-                                    return blockers.length === 0;
+                                    const openDropdown = document.querySelector('.dx-popup-wrapper.dx-overlay-visible');
+                                    return openDropdown !== null;
                                 }
                             """, timeout=5000)
 
-                            options_locator = frame.locator(f"{xpath}//option, {xpath} [role='option']")
+                            # Pausa extra per sicurezza
+                            await frame.wait_for_timeout(300)
+
+                            # Trova le opzioni
+                            options_locator = frame.locator(
+                                f"{xpath}//option, {xpath} [role='option'], [role='option']")
                             await options_locator.first.wait_for(state="visible", timeout=5000)
 
-                            max_attempts = 2
+                            max_attempts = 4
                             attempt = 0
                             while attempt < max_attempts:
                                 try:
                                     if dropdown_info['type'] == 'select':
-                                               await dropdown_locator.nth(0).select_option(label=text,
-                                                                                                             timeout=10000)
+                                        await dropdown_locator.nth(0).select_option(label=text, timeout=10000)
                                     elif dropdown_info['type'] == 'combobox':
-                                        option_locator = dropdown_locator.locator(f'option[aria-label="{text}"]')
+                                        # Prova a cercare l'opzione per aria-label o testo
+                                        option_locator = frame.locator(f"[role='option']", has_text=text)
                                         await option_locator.wait_for(state="visible", timeout=5000)
                                         await option_locator.click(force=True)
 
                                     return ActionResult(extracted_content=f"SUCCESS: Selected option '{text}'",
                                                         include_in_memory=True)
                                 except Exception as e:
-                                    await page.wait_for_timeout(500)
+                                    print(f"Attempt {attempt + 1} failed: {e}")
+                                    await frame.wait_for_timeout(500)
                                     attempt += 1
 
                         else:
+                            frame_index += 1
                             continue
 
                     except Exception as e:
+                        print(f"Frame {frame_index} attempt failed: {e}")
                         frame_index += 1
                         continue
 
