@@ -269,133 +269,67 @@ class Controller:
         @self.registry.action(
             description='Get all options from a native dropdown',
         )
-        async def select_dropdown_option(index: int, text: str, browser: BrowserContext) -> ActionResult:
+        async def select_dropdown_option(
+                index: int,
+                text: str,
+                browser: BrowserContext,
+        ) -> ActionResult:
+            """Select dropdown option for select or combobox by option text"""
             page = await browser.get_current_page()
             selector_map = await browser.get_selector_map()
             dom_element = selector_map[index]
-            xpath = '//' + dom_element.xpath
 
-            debug_messages = []
+            logger.debug(f"Attempting to select '{text}' using xpath: {dom_element.xpath}")
+            xpath = '//' + dom_element.xpath
 
             try:
                 frame_index = 0
                 for frame in page.frames:
-                    debug_messages.append(f"Checking frame {frame_index}")
-
                     try:
-                        dropdown_info = await frame.evaluate("""
+                        logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
+
+                        # Valutiamo se il dropdown esiste
+                        dropdown_info = await frame.evaluate(
+                            """
                             (xpath) => {
                                 try {
                                     const element = document.evaluate(xpath, document, null,
                                         XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
                                     if (!element) return {found: false};
-
-                                    if (element.tagName.toLowerCase() === 'select') {
-                                        return { type: 'select', found: true };
-                                    }
-
-                                    if (element.getAttribute('role') === 'combobox') {
-                                        return { type: 'combobox', found: true };
-                                    }
-
-                                    return { found: false };
+                                    return { found: true };
                                 } catch (e) {
                                     return { error: e.toString(), found: false };
                                 }
                             }
-                        """, xpath)
+                            """, xpath
+                        )
 
+                        # Se non abbiamo trovato l'elemento, procediamo al prossimo frame
                         if not dropdown_info.get('found'):
-                            debug_messages.append(f"Dropdown not found in frame {frame_index}")
-                            frame_index += 1
+                            logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
                             continue
 
-                        debug_messages.append(
-                            f"Dropdown found in frame {frame_index} - Type: {dropdown_info.get('type')}")
+                        logger.debug(f'Found dropdown in frame {frame_index}')
 
-                        dropdown_locator = frame.locator(xpath)
-                        await dropdown_locator.wait_for(state="visible", timeout=5000)
+                        # Selezioniamo l'opzione nel dropdown
+                        selected_option_values = await frame.locator(xpath).nth(0).select_option(label=text,
+                                                                                                 timeout=1000)
 
-                        if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
-                            debug_messages.append(f"Dropdown visible and enabled in frame {frame_index}")
+                        # Log dell'azione effettuata
+                        msg = f'Selected option {text} with value {selected_option_values}'
+                        logger.info(msg + f' in frame {frame_index}')
 
-                            await dropdown_locator.click(force=True)
-
-                            # Wait until no overlay is blocking
-                            debug_messages.append(f"Waiting for overlays to disappear in frame {frame_index}")
-                            await frame.wait_for_function("""
-                                () => {
-                                    const blockers = Array.from(document.querySelectorAll('*'))
-                                        .filter(el => {
-                                            const style = window.getComputedStyle(el);
-                                            return style.visibility !== 'hidden'
-                                                && style.opacity !== '0'
-                                                && style.pointerEvents !== 'none'
-                                                && (style.position === 'fixed' || style.position === 'absolute')
-                                                && el.offsetParent !== null
-                                                && el.offsetWidth > 0 && el.offsetHeight > 0;
-                                        });
-                                    return blockers.length === 0;
-                                }
-                            """, timeout=5000)
-                            debug_messages.append(f"No blockers detected in frame {frame_index}")
-
-                            options_locator = frame.locator(f"{xpath}//option, {xpath} [role='option']")
-                            await options_locator.first.wait_for(state="visible", timeout=5000)
-                            debug_messages.append(f"Options detected in dropdown in frame {frame_index}")
-
-                            max_attempts = 2
-                            attempt = 0
-                            while attempt < max_attempts:
-                                try:
-                                    if dropdown_info['type'] == 'select':
-                                        selected_option_values = await dropdown_locator.nth(0).select_option(label=text,
-                                                                                                             timeout=10000)
-                                        debug_messages.append(
-                                            f"Attempt {attempt + 1}: Selected option '{text}' via select tag")
-                                    elif dropdown_info['type'] == 'combobox':
-                                        option_locator = dropdown_locator.locator(f'option[aria-label="{text}"]')
-                                        await option_locator.wait_for(state="visible", timeout=5000)
-                                        await option_locator.click(force=True)
-                                        debug_messages.append(
-                                            f"Attempt {attempt + 1}: Selected option '{text}' via combobox")
-
-                                    return ActionResult(
-                                        extracted_content=" | ".join(
-                                            debug_messages) + f" | SUCCESS: Selected option '{text}'",
-                                        include_in_memory=True
-                                    )
-                                except Exception as e:
-                                    debug_messages.append(f"Attempt {attempt + 1}: Failed with error: {str(e)}")
-                                    await page.wait_for_timeout(500)
-                                    attempt += 1
-
-                            debug_messages.append(
-                                f"Failed to select option after {max_attempts} attempts in frame {frame_index}")
-                            frame_index += 1
-                            continue
-
-                        else:
-                            debug_messages.append(f"Dropdown not visible or not enabled in frame {frame_index}")
-                            frame_index += 1
-                            continue
+                        return ActionResult(extracted_content=msg, include_in_memory=True)
 
                     except Exception as e:
-                        debug_messages.append(f"Error in frame {frame_index}: {str(e)}")
-                        frame_index += 1
+                        logger.error(f"Error processing frame {frame_index}: {str(e)}")
                         continue
 
-                return ActionResult(
-                    extracted_content=" | ".join(debug_messages) + f" | FAILED: Could not select option '{text}'",
-                    include_in_memory=False
-                )
+                    frame_index += 1
 
             except Exception as e:
-                debug_messages.append(f"Critical error: {str(e)}")
-                return ActionResult(
-                    extracted_content=" | ".join(debug_messages) + f" | ERROR: {str(e)}",
-                    include_in_memory=False
-                )
+                logger.error(f"An error occurred: {str(e)}")
+                return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
 
         @self.registry.action(
             description='Select dropdown option for interactive element index by the text of the option you want to select',
