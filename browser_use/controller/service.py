@@ -372,18 +372,21 @@ class Controller:
                         dropdown_locator = frame.locator(xpath)
                         await dropdown_locator.wait_for(state="visible", timeout=5000)
 
-                        # 🔥 FIX 1: Aspetta che l'overlay sparisca
+                        # Aspettiamo che eventuali overlay spariscano (non blocca se non presenti)
                         try:
-                            await frame.locator(".dx-overlay-shader").wait_for(state="hidden", timeout=5000)
-                        except Exception:
-                            # Se non esiste, ignora
+                            await frame.locator(".dx-overlay-shader").wait_for(state="hidden", timeout=3000)
+                        except:
                             pass
 
                         if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
-                            # Clicca il dropdown
-                            await dropdown_locator.click(force=True)
+                       
+                            dropdown_element = await dropdown_locator.element_handle()
+                            await frame.evaluate(
+                                """element => element.dispatchEvent(new MouseEvent('click', { bubbles: true }))""",
+                                dropdown_element
+                            )
 
-                            # 🔥 FIX 2: Aspetta che il dropdown sia aperto visibilmente
+
                             await frame.wait_for_function("""
                                 () => {
                                     const openDropdown = document.querySelector('.dx-popup-wrapper.dx-overlay-visible');
@@ -391,13 +394,10 @@ class Controller:
                                 }
                             """, timeout=5000)
 
-                            # Pausa extra per sicurezza
-                            await frame.wait_for_timeout(300)
 
-                            # Trova le opzioni
-                            options_locator = frame.locator(
-                                f"{xpath}//option, {xpath} [role='option'], [role='option']")
+                            options_locator = frame.locator(f"[role='option'], {xpath}//option")
                             await options_locator.first.wait_for(state="visible", timeout=5000)
+
 
                             max_attempts = 4
                             attempt = 0
@@ -405,14 +405,21 @@ class Controller:
                                 try:
                                     if dropdown_info['type'] == 'select':
                                         await dropdown_locator.nth(0).select_option(label=text, timeout=10000)
+
                                     elif dropdown_info['type'] == 'combobox':
-                                        # Prova a cercare l'opzione per aria-label o testo
                                         option_locator = frame.locator(f"[role='option']", has_text=text)
                                         await option_locator.wait_for(state="visible", timeout=5000)
-                                        await option_locator.click(force=True)
+
+                                        # 👉 Anche qui: dispatchEvent per cliccare sull'opzione
+                                        option_element = await option_locator.element_handle()
+                                        await frame.evaluate(
+                                            """element => element.dispatchEvent(new MouseEvent('click', { bubbles: true }))""",
+                                            option_element
+                                        )
 
                                     return ActionResult(extracted_content=f"SUCCESS: Selected option '{text}'",
                                                         include_in_memory=True)
+
                                 except Exception as e:
                                     print(f"Attempt {attempt + 1} failed: {e}")
                                     await frame.wait_for_timeout(500)
