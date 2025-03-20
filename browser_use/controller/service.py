@@ -269,11 +269,7 @@ class Controller:
         @self.registry.action(
             description='Get all options from a native dropdown',
         )
-        async def select_dropdown_option(
-                index: int,
-                text: str,
-                browser: BrowserContext,
-        ) -> ActionResult:
+        async def select_dropdown_option(index: int, text: str, browser: BrowserContext) -> ActionResult:
             """Select dropdown option for select or combobox by option text"""
             page = await browser.get_current_page()
             selector_map = await browser.get_selector_map()
@@ -288,7 +284,6 @@ class Controller:
                     try:
                         logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
 
-                        # Valutiamo se il dropdown esiste
                         dropdown_info = await frame.evaluate(
                             """
                             (xpath) => {
@@ -304,20 +299,30 @@ class Controller:
                             """, xpath
                         )
 
-                        # Se non abbiamo trovato l'elemento, procediamo al prossimo frame
                         if not dropdown_info.get('found'):
                             logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
                             continue
 
                         logger.debug(f'Found dropdown in frame {frame_index}')
 
-                        # Selezioniamo l'opzione nel dropdown
-                        selected_option_values = await frame.locator(xpath).nth(0).select_option(label=text,
-                                                                                                 timeout=1000)
+                        # Clicca sul dropdown per aprirlo
+                        dropdown_locator = await frame.locator(xpath)
+                        await dropdown_locator.click(timeout=10000)  #
 
-                        # Log dell'azione effettuata
-                        msg = f'Selected option {text} with value {selected_option_values}'
-                        logger.info(msg + f' in frame {frame_index}')
+                        await frame.wait_for_function("""
+                            () => {
+                                const openDropdown = document.querySelector('.dx-popup-wrapper.dx-overlay-visible');
+                                return openDropdown !== null;
+                            }
+                        """, timeout=10000)
+
+                        option_locator = await frame.locator(f"[role='option'][title='{text}']")
+                        await option_locator.wait_for(state="visible",
+                                                      timeout=10000)
+                        await option_locator.click(timeout=5000)
+
+                        msg = f"Selected option '{text}' in frame {frame_index}"
+                        logger.info(msg)
 
                         return ActionResult(extracted_content=msg, include_in_memory=True)
 
@@ -369,7 +374,7 @@ class Controller:
                             continue
 
                         dropdown_locator = frame.locator(xpath)
-                        await dropdown_locator.wait_for(state="visible", timeout=10000)  
+                        await dropdown_locator.wait_for(state="visible", timeout=10000)
                         try:
                             await frame.locator(".dx-overlay-shader").wait_for(state="hidden", timeout=5000)
                         except:
