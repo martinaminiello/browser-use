@@ -383,16 +383,16 @@ class Controller:
 				browser: BrowserContext,
 		) -> ActionResult:
 			"""Select dropdown option for select or combobox by option text"""
+
 			page = await browser.get_current_page()
 			selector_map = await browser.get_selector_map()
 			dom_element = selector_map[index]
 
 			logger.debug(f"Attempting to select '{text}' using xpath: {dom_element.xpath}")
-			xpath = '//' + dom_element.xpath
+			xpath = dom_element.xpath if dom_element.xpath.startswith('//') else '//' + dom_element.xpath
 
 			try:
-				frame_index = 0
-				for frame in page.frames:
+				for frame_index, frame in enumerate(page.frames):
 					try:
 						logger.debug(f'Trying frame {frame_index} URL: {frame.url}')
 
@@ -417,11 +417,12 @@ class Controller:
                                     return { error: e.toString(), found: false };
                                 }
                             }
-                            """, xpath
+                            """,
+							xpath
 						)
 
 						if not dropdown_info.get('found'):
-							logger.error(f'Frame {frame_index} error: {dropdown_info.get("error")}')
+							logger.debug(f'No dropdown found in frame {frame_index}')
 							continue
 
 						logger.debug(f'Found dropdown in frame {frame_index}: {dropdown_info}')
@@ -429,28 +430,51 @@ class Controller:
 						dropdown_locator = frame.locator(xpath)
 						await dropdown_locator.wait_for(state="visible", timeout=5000)
 
-						if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
-							await dropdown_locator.click()
-						else:
+						if not (await dropdown_locator.is_visible() and await dropdown_locator.is_enabled()):
 							logger.error("Dropdown not ready for interaction.")
+							continue
 
 						if dropdown_info['type'] == 'select':
-							selected_option_values = await dropdown_locator.nth(0).select_option(label=text,
-																								 timeout=10000)
+							logger.debug("Interacting with native <select>")
+							await dropdown_locator.select_option(label=text, timeout=10000)
+
 						elif dropdown_info['type'] == 'combobox':
-							selected_option_values = await dropdown_locator.locator(
-								f'option[aria-label="{text}"]').click(timeout=10000)
+							logger.debug("Interacting with custom combobox")
+							await dropdown_locator.click()
 
-						msg = f'Selected option {text} with value {selected_option_values}'
-						logger.info(msg + f' in frame {frame_index}')
+							option_locator = frame.locator('[role="option"], .dx-list-item')
+							await option_locator.first.wait_for(state="visible", timeout=3000)
 
+							count = await option_locator.count()
+							logger.debug(f"Found {count} options in combobox")
+
+							found = False
+							for i in range(count):
+								option_elem = option_locator.nth(i)
+								option_text = (await option_elem.inner_text()).strip()
+								logger.debug(f"Option {i}: '{option_text}'")
+								if option_text == text:
+									await option_elem.click()
+									logger.info(f"Clicked option '{option_text}' in frame {frame_index}")
+									found = True
+									break
+
+							if not found:
+								msg = f"Option '{text}' not found in combobox"
+								logger.error(msg)
+								return ActionResult(extracted_content=msg, include_in_memory=False)
+
+						msg = f'Selected option "{text}" in frame {frame_index}'
+						logger.info(msg)
 						return ActionResult(extracted_content=msg, include_in_memory=True)
 
 					except Exception as e:
 						logger.error(f"Error processing frame {frame_index}: {str(e)}")
 						continue
 
-				frame_index += 1
+				msg = f"Dropdown or option '{text}' not found in any frame"
+				logger.error(msg)
+				return ActionResult(extracted_content=msg, include_in_memory=False)
 
 			except Exception as e:
 				logger.error(f"An error occurred: {str(e)}")
