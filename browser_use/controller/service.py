@@ -393,6 +393,7 @@ class Controller:
 			try:
 				for frame_index, frame in enumerate(page.frames):
 					try:
+						# Verifica se l'elemento è un 'select' o 'combobox'
 						dropdown_info = await frame.evaluate(
 							"""
                             (xpath) => {
@@ -424,22 +425,24 @@ class Controller:
 						if not (await dropdown_locator.is_visible() and await dropdown_locator.is_enabled()):
 							continue
 
+						
 						if dropdown_info['type'] == 'select':
 							await dropdown_locator.select_option(label=text, timeout=10000)
 
+
 						elif dropdown_info['type'] == 'combobox':
 
-							await get_dropdown_options(index, browser)
-							option_locator= frame.locator(f'[role="option"]:has-text("{text}")')
-							await option_locator.click(force=True)
+							option_locator = frame.locator(f'[role="option"]:has-text("{text}")')
+							await option_locator.wait_for(state="visible", timeout=5000)
 
-
-
+							if await option_locator.is_visible() and await option_locator.is_enabled():
+								await option_locator.click(force=True)
 
 						msg = f'Selected option "{text}" in frame {frame_index}'
 						return ActionResult(extracted_content=msg, include_in_memory=True)
 
 					except Exception as e:
+						print(f"Frame {frame_index} exception: {e}")
 						continue
 
 				msg = f"Dropdown or option '{text}' not found in any frame"
