@@ -369,59 +369,37 @@ class Controller:
                             continue
 
                         dropdown_locator = frame.locator(xpath)
-                        await dropdown_locator.wait_for(state="visible", timeout=5000)
-
+                        await dropdown_locator.wait_for(state="visible", timeout=10000)  
                         try:
-                            await frame.locator(".dx-overlay-shader").wait_for(state="hidden", timeout=3000)
+                            await frame.locator(".dx-overlay-shader").wait_for(state="hidden", timeout=5000)
                         except:
                             pass
 
-                        if await dropdown_locator.is_visible() and await dropdown_locator.is_enabled():
-                            dropdown_element = await dropdown_locator.element_handle()
-                            await frame.evaluate(
-                                """element => element.click()""", dropdown_element
-                            )
+                        dropdown_element = await dropdown_locator.element_handle()
+                        await frame.evaluate("""element => element.click()""", dropdown_element)
 
-                            await frame.wait_for_function("""
-                                () => {
-                                    const openDropdown = document.querySelector('.dx-popup-wrapper.dx-overlay-visible');
-                                    return openDropdown !== null;
-                                }
-                            """, timeout=5000)
+                        # Verifica che il dropdown sia aperto
+                        await frame.wait_for_function("""
+                            () => {
+                                const openDropdown = document.querySelector('.dx-popup-wrapper.dx-overlay-visible');
+                                return openDropdown !== null;
+                            }
+                        """, timeout=10000)  # Timeout a 10 secondi
 
-                            options_locator = frame.locator(f"[role='option'], {xpath}//option")
-                            await options_locator.first.wait_for(state="visible", timeout=5000)
+                        options_locator = frame.locator(f"[role='option'][title='{text}']")
+                        await options_locator.first.wait_for(state="visible", timeout=10000)  # Timeout a 10 secondi
 
-                            max_attempts = 4
-                            for attempt in range(max_attempts):
-                                try:
-                                    if dropdown_info['type'] == 'select':
-                                        await dropdown_locator.select_option(label=text, timeout=10000)
+                        option_element = await options_locator.first.element_handle()
+                        await frame.evaluate("""element => element.click()""", option_element)
 
-                                    elif dropdown_info['type'] == 'combobox':
-                                        option_locator = frame.locator(f"[role='option']", has_text=text)
-                                        await option_locator.wait_for(state="visible", timeout=5000)
-
-                                        option_element = await option_locator.element_handle()
-                                        await frame.evaluate(
-                                            """element => element.click()""", option_element
-                                        )
-
-                                    return ActionResult(extracted_content=f"SUCCESS: Selected option '{text}'",
-                                                        include_in_memory=True)
-
-                                except Exception as e:
-                                    print(f"Attempt {attempt + 1} failed: {e}")
-                                    await frame.wait_for_timeout(500)
-
-                        else:
-                            continue
+                        return ActionResult(extracted_content=f"SUCCESS: Selected option '{text}'",
+                                            include_in_memory=True)
 
                     except Exception as e:
                         print(f"Frame attempt failed: {e}")
                         continue
 
-                return ActionResult(extracted_content=f"Failed to select option '{text}'", include_in_memory=False)
+                return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
 
             except Exception as e:
                 return ActionResult(extracted_content=f"Error: {str(e)}", include_in_memory=False)
